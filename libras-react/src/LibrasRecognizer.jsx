@@ -173,7 +173,6 @@ export default function LibrasRecognizer() {
   const handRef = useRef(null)
   const modeloRef = useRef(null)
   const janelaRef = useRef([])
-  const tsRef = useRef(0)
 
   const [pronto, setPronto] = useState(false)
   const [ativo, setAtivo] = useState(false)
@@ -252,14 +251,16 @@ export default function LibrasRecognizer() {
   }, [])
 
   const capturarEPrever = useCallback(() => {
+    console.log("CAPTURANDO") 
     const video = videoRef.current
     const modelo = modeloRef.current
     if (!video || !modelo || video.readyState < 2 || !poseRef.current || !handRef.current) return
 
-    tsRef.current += kIntervaloMs
+    const now = performance.now();
 
-    const poseResult = poseRef.current.detectForVideo(video, tsRef.current)
-    const handResult = handRef.current.detectForVideo(video, tsRef.current)
+    const poseResult = poseRef.current.detectForVideo(video, now);
+
+    const handResult = handRef.current.detectForVideo(video, now);
     const vetor = extrairLandmarks(poseResult, handResult)
 
     janelaRef.current = [...janelaRef.current, vetor].slice(-kFramesPorAmostra)
@@ -304,10 +305,10 @@ export default function LibrasRecognizer() {
   const iniciar = useCallback(() => {
     if (intervaloRef.current) return
     janelaRef.current = []
-    tsRef.current = 0
     setFrames(0)
     setResultado(null)
     setAtivo(true)
+    console.log("INICIAR")
     intervaloRef.current = setInterval(capturarEPrever, kIntervaloMs)
   }, [capturarEPrever])
 
@@ -318,6 +319,7 @@ export default function LibrasRecognizer() {
     setAtivo(false)
     setResultado(null)
     setFrames(0)
+    console.log("PARAR")
   }, [])
 
   useEffect(() => () => clearInterval(intervaloRef.current), [])
