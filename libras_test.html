@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Libras Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0f172a;
+      color: #f1f5f9;
+      font-family: monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+      padding: 20px;
+    }
+
+    #video {
+      width: 480px;
+      max-width: 100%;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      transform: scaleX(-1); /* espelho */
+    }
+
+    #canvas { display: none; }
+
+    #sinal {
+      font-size: 56px;
+      font-weight: bold;
+      letter-spacing: 3px;
+      min-height: 70px;
+      text-align: center;
+    }
+
+    #confianca {
+      font-size: 13px;
+      color: #64748b;
+      text-align: center;
+    }
+
+    #status {
+      font-size: 12px;
+      color: #f59e0b;
+      text-align: center;
+    }
+
+    #barras {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: 480px;
+      max-width: 100%;
+    }
+
+    .barra-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .barra-label {
+      width: 80px;
+      font-size: 12px;
+      color: #94a3b8;
+      text-align: right;
+    }
+
+    .barra-track {
+      flex: 1;
+      height: 6px;
+      background: #1e293b;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .barra-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.15s ease;
+      background: #60a5fa;
+    }
+
+    .barra-fill.ativo { background: #4ade80; }
+
+    .barra-val {
+      width: 36px;
+      font-size: 11px;
+      color: #64748b;
+      text-align: right;
+    }
+
+    #frames {
+      font-size: 11px;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="status">carregando modelo...</div>
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas"></canvas>
+
+  <div id="sinal">—</div>
+  <div id="confianca"></div>
+  <div id="frames"></div>
+
+  <div id="barras">
+    <div class="barra-row">
+      <span class="barra-label">Oi</span>
+      <div class="barra-track"><div class="barra-fill" id="bar-Oi" style="width:0%"></div></div>
+      <span class="barra-val" id="val-Oi">0%</span>
+    </div>
+    <div class="barra-row">
+      <span class="barra-label">Tudo bem</span>
+      <div class="barra-track"><div class="barra-fill" id="bar-Tudo_bem" style="width:0%"></div></div>
+      <span class="barra-val" id="val-Tudo_bem">0%</span>
+    </div>
+    <div class="barra-row">
+      <span class="barra-label">Tchau</span>
+      <div class="barra-track"><div class="barra-fill" id="bar-Tchau" style="width:0%"></div></div>
+      <span class="barra-val" id="val-Tchau">0%</span>
+    </div>
+  </div>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+
+  <!-- MediaPipe Holistic via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+  <script>
+    const SINAIS          = ['Oi', 'Tudo_bem', 'Tchau']
+    const FRAMES_JANELA   = 30
+    const LIMIAR          = 0.85
+    const DIM_POSE        = 33 * 4
+    const DIM_MAO         = 21 * 3
+
+    const elStatus    = document.getElementById('status')
+    const elSinal     = document.getElementById('sinal')
+    const elConfianca = document.getElementById('confianca')
+    const elFrames    = document.getElementById('frames')
+    const video       = document.getElementById('video')
+    const canvas      = document.getElementById('canvas')
+
+    let model  = null
+    let janela = []  // sliding window de landmarks
+
+    function extrairLandmarks(results) {
+      const pose = results.poseLandmarks
+        ? results.poseLandmarks.flatMap(lm => [lm.x, lm.y, lm.z, lm.visibility])
+        : new Array(DIM_POSE).fill(0)
+
+      let maoEsq = new Array(DIM_MAO).fill(0)
+      let maoDir = new Array(DIM_MAO).fill(0)
+
+      if (results.leftHandLandmarks)
+        maoEsq = results.leftHandLandmarks.flatMap(lm => [lm.x, lm.y, lm.z])
+      if (results.rightHandLandmarks)
+        maoDir = results.rightHandLandmarks.flatMap(lm => [lm.x, lm.y, lm.z])
+
+      return [...pose, ...maoEsq, ...maoDir]  // 258 valores
+    }
+
+    async function inferir(vetor) {
+      janela.push(vetor)
+      if (janela.length > FRAMES_JANELA) janela.shift()
+
+      elFrames.textContent = `frames: ${janela.length}/${FRAMES_JANELA}`
+
+      if (janela.length < FRAMES_JANELA) {
+        elSinal.textContent = '...'
+        elConfianca.textContent = ''
+        return
+      }
+
+      const input  = tf.tensor3d([janela], [1, FRAMES_JANELA, 258])
+      const saida  = model.predict(input)
+      const dados  = await saida.data()
+      input.dispose()
+      saida.dispose()
+
+      const idx       = dados.indexOf(Math.max(...dados))
+      const confianca = dados[idx]
+
+      // atualiza barras
+      SINAIS.forEach((s, i) => {
+        const pct = (dados[i] * 100).toFixed(0)
+        document.getElementById(`bar-${s}`).style.width = pct + '%'
+        document.getElementById(`val-${s}`).textContent = pct + '%'
+        document.getElementById(`bar-${s}`).className =
+          'barra-fill' + (i === idx && confianca >= LIMIAR ? ' ativo' : '')
+      })
+
+      if (confianca >= LIMIAR) {
+        elSinal.textContent     = SINAIS[idx].replace('_', ' ')
+        elConfianca.textContent = `confiança: ${(confianca * 100).toFixed(1)}%`
+      } else {
+        elSinal.textContent     = '—'
+        elConfianca.textContent = 'aguardando sinal'
+      }
+    }
+
+    async function init() {
+      // carrega modelo
+      try {
+        model = await tf.loadLayersModel('libras_model_tfjs/model.json')
+        elStatus.textContent = 'modelo ok'
+        setTimeout(() => elStatus.style.display = 'none', 2000)
+      } catch(e) {
+        elStatus.textContent = 'erro ao carregar modelo — coloca os arquivos na mesma pasta'
+        elStatus.style.color = '#ef4444'
+        return
+      }
+
+      // holistic
+      const holistic = new Holistic({
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${f}`
+      })
+
+      holistic.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      })
+
+      holistic.onResults(results => inferir(extrairLandmarks(results)))
+
+      // camera
+      const cam = new Camera(video, {
+        onFrame: async () => { await holistic.send({ image: video }) },
+        width: 480,
+        height: 360,
+      })
+      cam.start()
+    }
+
+    init()
+  </script>
+</body>
+</html>
